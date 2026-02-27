@@ -27,8 +27,14 @@ git clone <本專案網址>
 cd taiko_ai
 
 # 建議使用虛擬環境
-python -m venv venv
-source venv/bin/activate  # Windows 輸入: venv\Scripts\activate
+python -m venv .venv
+
+# macOS / Linux
+source .venv/Scripts/activate
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# Windows (CMD)
+.venv\Scripts\activate.bat
 
 pip install -r requirements.txt
 ```

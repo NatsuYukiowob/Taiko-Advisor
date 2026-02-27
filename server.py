@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,49 +46,58 @@ except Exception as e:
     collection = None
 
 # 讀取全部歌曲做為 Fallback
-with open(db_path, 'r', encoding='utf-8') as f:
+with open(db_path, "r", encoding="utf-8") as f:
     all_songs = json.load(f)
 
 users_path = os.getenv("USERS_DB_PATH", "data/users.json")
 
+
 def load_users():
     if not os.path.exists(users_path):
         return {}
-    with open(users_path, 'r', encoding='utf-8') as f:
+    with open(users_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_users(users_data):
-    with open(users_path, 'w', encoding='utf-8') as f:
+    with open(users_path, "w", encoding="utf-8") as f:
         json.dump(users_data, f, indent=2, ensure_ascii=False)
+
 
 class MessageItem(BaseModel):
     role: str
     content: str
-    
+
+
 class ChatRequest(BaseModel):
     message: str
     code: str
     history: list[MessageItem] = []
 
+
 class LoginRequest(BaseModel):
     code: str
 
+
 class ProfileRequest(BaseModel):
     code: str
-    name: str   # 玩家名稱
+    name: str  # 玩家名稱
     level: str  # 最高段位
     star_pref: str  # 偏好星星數
     style: str  # 打法偏好
+
 
 class SaveSessionRequest(BaseModel):
     code: str
     title: str
     messages: list[MessageItem]
 
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
+
 
 @app.post("/api/login")
 async def login_endpoint(req: LoginRequest):
@@ -97,127 +106,143 @@ async def login_endpoint(req: LoginRequest):
         user_data = users[req.code]
         # 回傳是否需要填寫 profile
         needs_profile = user_data.get("profile") is None
-        return {"success": True, "needs_profile": needs_profile, "profile": user_data.get("profile")}
+        return {
+            "success": True,
+            "needs_profile": needs_profile,
+            "profile": user_data.get("profile"),
+        }
     return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
+
 
 @app.post("/api/profile")
 async def profile_endpoint(req: ProfileRequest):
     users = load_users()
     if req.code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-        
+
     users[req.code]["profile"] = {
         "name": req.name,
         "level": req.level,
         "star_pref": req.star_pref,
-        "style": req.style
+        "style": req.style,
     }
     save_users(users)
     return {"success": True, "message": "個人資料已儲存！"}
+
 
 @app.get("/api/profile")
 async def get_profile(code: str):
     users = load_users()
     if code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
+
     profile = users[code].get("profile")
     return {"profile": profile}
+
 
 @app.get("/api/sessions")
 async def get_sessions(code: str):
     users = load_users()
     if code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
+
     sessions = users[code].get("chat_sessions", [])
     return {"sessions": sessions}
+
 
 @app.post("/api/sessions")
 async def save_session(req: SaveSessionRequest):
     users = load_users()
     if req.code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
+
     user_data = users[req.code]
     sessions = user_data.get("chat_sessions", [])
-    
+
     if len(sessions) >= 3:
-        return JSONResponse(status_code=400, content={"error": "已達到儲存對話數量上限 (3個)，請先刪除舊的對話。"})
-        
+        return JSONResponse(
+            status_code=400,
+            content={"error": "已達到儲存對話數量上限 (3個)，請先刪除舊的對話。"},
+        )
+
     import uuid
+
     new_session = {
         "id": str(uuid.uuid4()),
         "title": req.title,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages]
+        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
     }
-    
+
     sessions.append(new_session)
     user_data["chat_sessions"] = sessions
     save_users(users)
-    
+
     return {"success": True, "session_id": new_session["id"]}
+
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str, code: str):
     users = load_users()
     if code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-        
+
     user_data = users[code]
     sessions = user_data.get("chat_sessions", [])
-    
+
     new_sessions = [s for s in sessions if s["id"] != session_id]
     user_data["chat_sessions"] = new_sessions
     save_users(users)
-    
+
     return {"success": True}
+
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
     message = req.message
     code = req.code
-    
+
     users = load_users()
     if code not in users:
         return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
+
     user_data = users[code]
     profile = user_data.get("profile")
     profile_text = ""
     if profile:
-        profile_text = f'''【玩家實力與偏好設定】
+        profile_text = f"""【玩家實力與偏好設定】
 玩家名稱: {profile.get("name", "玩家")}
 最高段位: {profile.get("level", "未知")}
 偏好星級: {profile.get("star_pref", "未知")}
 打法偏好: {profile.get("style", "未知")}
-'''
-    
-    if not client:
+"""
+
+    if client is None:
         return JSONResponse(status_code=500, content={"error": "找不到 Gemini API Key"})
 
     candidate_songs = []
-    
+
     if collection:
         try:
             # 進行語意查詢，取出前30筆
-            results = collection.query(
-                query_texts=[message],
-                n_results=30
-            )
-            if results and results['metadatas'] and len(results['metadatas'][0]) > 0:
-                for meta in results['metadatas'][0]:
-                    song_obj = json.loads(meta['json'])
-                    candidate_songs.append(song_obj)
+            results = collection.query(query_texts=[message], n_results=30)
+            if results and results["metadatas"] and len(results["metadatas"][0]) > 0:
+                for meta in results["metadatas"][0]:
+                    json_data = meta.get("json")
+                    if isinstance(json_data, str):
+                        song_obj = json.loads(json_data)
+                    else:
+                        song_obj = json_data
+                    if song_obj:
+                        candidate_songs.append(song_obj)
         except Exception as e:
             print(f"ChromaDB 查詢發生錯誤: {e}")
-    
+
     # Fallback 機制
     if not candidate_songs:
         candidate_songs = random.sample(all_songs, min(15, len(all_songs)))
 
     songs_context = json.dumps(candidate_songs, ensure_ascii=False)
-    
+
     history_text = ""
     if req.history:
         history_text = "【之前的對話紀錄】\n"
@@ -246,19 +271,24 @@ async def chat_endpoint(req: ChatRequest):
 {message}
 """
     try:
+
         def stream_generator():
+            assert client is not None
             responseStream = client.models.generate_content_stream(
-                model='gemini-2.5-flash-lite',
-                contents=prompt,            
+                model="gemini-2.5-flash-lite",
+                contents=prompt,
             )
             for chunk in responseStream:
                 if chunk.text:
                     yield chunk.text
 
         return StreamingResponse(stream_generator(), media_type="text/plain")
-        
+
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"LLM 發生錯誤: {str(e)}"})
+        return JSONResponse(
+            status_code=500, content={"error": f"LLM 發生錯誤: {str(e)}"}
+        )
+
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
