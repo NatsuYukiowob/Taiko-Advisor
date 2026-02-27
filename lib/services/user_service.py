@@ -48,6 +48,17 @@ def create_user(code: str) -> bool:
     return True
 
 
+def delete_user(code: str) -> bool:
+    """刪除用戶"""
+    users = load_users()
+    if code not in users:
+        return False
+    
+    del users[code]
+    save_users(users)
+    return True
+
+
 def update_user_profile(code: str, profile_data: dict) -> bool:
     """更新用戶個人資料"""
     users = load_users()

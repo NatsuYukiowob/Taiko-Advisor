@@ -564,6 +564,64 @@ body {
     background: rgba(255, 255, 255, 0.1);
 }
 
+/* 吐司訊息 */
+.toast-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    min-width: 260px;
+    max-width: 420px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(22, 22, 30, 0.92);
+    color: #e5e9f0;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(8px);
+    font-size: 14px;
+    line-height: 1.5;
+    opacity: 0;
+    transform: translateY(-8px);
+    animation: toastIn 0.2s ease forwards;
+    pointer-events: auto;
+}
+
+.toast-error {
+    border-color: rgba(247, 118, 142, 0.5);
+    color: #ffc4cf;
+}
+
+.toast-success {
+    border-color: rgba(158, 206, 106, 0.5);
+    color: #d3f3b4;
+}
+
+.toast-hide {
+    animation: toastOut 0.2s ease forwards;
+}
+
+@keyframes toastIn {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes toastOut {
+    to {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+}
+
 /* RWD: 手機版面支援 */
 @media (max-width: 768px) {
     .app-container {
@@ -631,5 +689,16 @@ body {
     #send-btn {
         width: 100%;
         padding: 12px;
+    }
+
+    .toast-container {
+        left: 12px;
+        right: 12px;
+        top: 12px;
+    }
+
+    .toast {
+        min-width: 0;
+        max-width: 100%;
     }
 }

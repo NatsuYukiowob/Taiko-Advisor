@@ -10,7 +10,7 @@ import chromadb
 from google import genai
 import config
 from lib.auth import validate_token
-from lib.auth.token_manager import add_to_token_blacklist
+from lib.auth.token_manager import logout_user
 from lib.auth.validators import sanitize_input
 from lib.services.user_service import load_users, get_user_profile
 from lib.services.chat_service import (
@@ -33,6 +33,10 @@ class ChatRequest(BaseModel):
     message: str
     code: str
     history: list[MessageItem] = []
+
+
+class LogoutRequest(BaseModel):
+    code: str
 
 
 @router.post("/chat")
@@ -95,20 +99,19 @@ async def chat(
 
 
 @router.post("/logout")
-async def logout(code: str):
+async def logout(req: LogoutRequest):
     """
-    登出端點 - 使令牌失效
+    登出端點 - 刪除用戶記錄
     """
-    code = sanitize_input(code, max_length=config.ACCESS_CODE_MAX_LENGTH)
+    code = sanitize_input(req.code, max_length=config.ACCESS_CODE_MAX_LENGTH)
     
     if not code:
-        return JSONResponse(status_code=400, content={"error": "存取代碼不能為空"})
+        return JSONResponse(status_code=400, content={"error": "存取代碼無效"})
     
     users = load_users()
     if code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
+        return JSONResponse(status_code=401, content={"error": "無效的存取代碼"})
     
-    # 將令牌加入黑名單
-    add_to_token_blacklist(code)
+    logout_user(code)
     
     return {"success": True, "message": "已成功登出"}

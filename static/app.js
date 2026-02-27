@@ -3,26 +3,85 @@ const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
 const typingIndicator = document.getElementById('typing-indicator');
 const statusIndicator = document.querySelector('.status-indicator');
+const toastContainer = document.getElementById('toast-container');
 
 let accessCode = localStorage.getItem('access_code');
 let chatContext = [];
 let currentSessions = [];
 
+function showToast(message, type = 'info', duration = 3200) {
+    if (!toastContainer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('toast-hide');
+        setTimeout(() => {
+            toast.remove();
+        }, 220);
+    }, duration);
+}
+
 function showErrorMessage(message) {
-    appendMessage('bot', `❌ 錯誤: ${message}`);
+    showToast(`❌ ${message}`, 'error');
 }
 
 function showSuccessMessage(message) {
-    appendMessage('bot', `✅ ${message}`);
+    showToast(`✅ ${message}`, 'success');
+}
+
+function showLoginModal() {
+    document.getElementById('auth-overlay').style.display = 'flex';
+    document.getElementById('login-modal').style.display = 'block';
+    document.getElementById('profile-modal').style.display = 'none';
+}
+
+async function restoreFromLocalAccessCode() {
+    try {
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: accessCode })
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            localStorage.removeItem('access_code');
+            accessCode = null;
+            showLoginModal();
+            showErrorMessage(data.error || '登入狀態已失效，請重新登入');
+            return;
+        }
+
+        document.getElementById('login-error').style.display = 'none';
+        document.getElementById('login-modal').style.display = 'none';
+
+        if (data.needs_profile) {
+            document.getElementById('auth-overlay').style.display = 'flex';
+            document.getElementById('profile-modal').style.display = 'block';
+            document.getElementById('close-profile-btn').style.display = 'none';
+            return;
+        }
+
+        document.getElementById('auth-overlay').style.display = 'none';
+        await loadSessions(true);
+    } catch (e) {
+        console.error('恢復登入狀態失敗:', e);
+        showLoginModal();
+        showErrorMessage('無法恢復登入狀態，請檢查網路連線');
+    }
 }
 
 // 初始化驗證
-window.onload = () => {
+window.onload = async () => {
     if (!accessCode) {
-        document.getElementById('auth-overlay').style.display = 'flex';
-        document.getElementById('login-modal').style.display = 'block';
+        showLoginModal();
     } else {
-        loadSessions();
+        await restoreFromLocalAccessCode();
     }
 };
 
@@ -52,7 +111,7 @@ async function login() {
                 document.getElementById('close-profile-btn').style.display = 'none';
             } else {
                 document.getElementById('auth-overlay').style.display = 'none';
-                loadSessions();
+                loadSessions(true);
             }
         } else {
             showErrorMessage(data.error || '驗證失敗，請檢查存取代碼');
@@ -90,7 +149,7 @@ async function saveProfile() {
         if (res.ok) {
             document.getElementById('auth-overlay').style.display = 'none';
             document.getElementById('profile-modal').style.display = 'none';
-            appendMessage('bot', '✅ 您的玩家履歷已設定 / 更新成功！');
+            showSuccessMessage('您的玩家履歷已設定 / 更新成功！');
             loadSessions();
         } else {
             const data = await res.json();
@@ -102,13 +161,18 @@ async function saveProfile() {
     }
 }
 
-async function loadSessions() {
+async function loadSessions(autoLoadLatest = false) {
     try {
         const res = await fetch(`/api/sessions?code=${accessCode}`);
         if (res.ok) {
             const data = await res.json();
             currentSessions = data.sessions || [];
             renderSessions();
+
+            if (autoLoadLatest && currentSessions.length > 0) {
+                const latestSession = currentSessions[currentSessions.length - 1];
+                loadChat(latestSession);
+            }
         } else {
             console.error("無法載入歷史紀錄");
         }
@@ -290,10 +354,10 @@ async function sendMessage() {
         typingIndicator.style.display = 'none';
 
         if (response.status === 401) {
-            appendMessage('bot', '您的存取代碼已失效，請重新整理網頁登入！');
+            appendMessage('bot', '❌ 您的存取代碼已失效，請重新登入。');
             localStorage.removeItem('access_code');
         } else if (!response.ok) {
-            appendMessage('bot', '伺服器發生錯誤，請稍後再試。');
+            appendMessage('bot', '❌ 伺服器發生錯誤，請稍後再試。');
         } else {
             // 建立一個空的泡泡來接收串流
             const wrapper = document.createElement('div');
@@ -338,17 +402,17 @@ async function sendMessage() {
 }
 
 function logout() {
-    if (!confirm('確定要登出嗎？')) return;
+    if (!confirm('確定要登出並刪除嗎？')) return;
     
     try {
         // 調用後端 logout 端點使令牌失效
-        fetch('/api/logout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: accessCode })
-        }).catch(e => console.error('登出請求失敗:', e));
+        fetch("/api/logout", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ code: accessCode }),
+		}).catch((e) => console.error("登出並刪除請求失敗:", e));
     } catch (e) {
-        console.error('登出錯誤:', e);
+        console.error("登出並刪除錯誤:", e);
     }
     
     // 清除本地存儲
