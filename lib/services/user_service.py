@@ -113,6 +113,10 @@ def delete_session(code: str, session_id: str) -> bool:
     sessions = users[code].get("chat_sessions", [])
     new_sessions = [s for s in sessions if s["id"] != session_id]
     
+    # 如果沒有任何對話被刪除，返回 False
+    if len(new_sessions) == len(sessions):
+        return False
+    
     users[code]["chat_sessions"] = new_sessions
     save_users(users)
     return True
