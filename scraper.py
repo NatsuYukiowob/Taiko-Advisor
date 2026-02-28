@@ -172,8 +172,8 @@ def merge_and_save(new_songs, db_path=None):
         try:
             with open(db_path, "r", encoding="utf-8") as f:
                 existing_songs = json.load(f)
-        finally:
-            pass
+        except json.JSONDecodeError:
+            existing_songs = []
 
     # 去除舊資料中的限定曲
     existing_songs = [s for s in existing_songs if "【限定】" not in s.get("title", "")]
