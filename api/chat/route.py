@@ -83,7 +83,7 @@ async def chat(
     try:
         def stream_generator():
             responseStream = client.models.generate_content_stream(
-                model="gemini-2.5-flash-lite",
+                model=config.GEMINI_MODEL,
                 contents=prompt,
             )
             for chunk in responseStream:
