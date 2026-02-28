@@ -1,264 +1,291 @@
+"""
+太鼓之達人 AI 顧問 - 主應用程式入口點
+簡化版本：所有業務邏輯已模塊化到 lib/ 和 api/ 目錄
+
+目錄結構：
+lib/
+  ├── auth/          # 身份驗證模塊
+  │   ├── token_manager.py
+  │   └── validators.py
+  ├── services/      # 業務邏輯服務
+  │   ├── user_service.py
+  │   └── chat_service.py
+  └── utils/         # 工具函數
+
+api/                 # API 路由
+  ├── login/
+  │   └── route.py
+  ├── profile/
+  │   └── route.py
+  ├── sessions/
+  │   └── route.py
+  └── chat/
+      └── route.py
+"""
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 import os
 import json
-import random
-from google import genai
-import chromadb
-from dotenv import load_dotenv
+import logging
+from uuid import uuid4
 
-# 載入環境變數
-load_dotenv()
+import config
+from lib.dependencies import init_resources, cleanup_resources
+from lib.exceptions import TaikoAdvisorException
+from api.login.route import router as login_router
+from api.profile.route import router as profile_router
+from api.sessions.route import router as sessions_router
+from api.chat.route import router as chat_router
 
-# 初始化 FastAPI
-app = FastAPI(title="Taiko AI Advisor API")
+logger = logging.getLogger(__name__)
 
-# 設定 CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# ============================================================================
+# 生命週期管理
+# ============================================================================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """應用程式生命週期管理"""
+    # 啟動時初始化資源
+    logger.info("啟動 Taiko AI Advisor...")
+    init_resources(
+        gemini_key=config.GEMINI_API_KEY or "",
+        chroma_path=config.CHROMA_DB_PATH,
+        collection_name=config.CHROMA_COLLECTION_NAME,
+        songs_path=config.SONGS_DB_PATH,
+    )
+    logger.info("資源初始化完成")
+    
+    yield
+    
+    # 關閉時清理資源
+    logger.info("清理資源...")
+    cleanup_resources()
+    logger.info("Taiko AI Advisor 已關閉")
+
+# ============================================================================
+# 初始化 FastAPI 應用
+# ============================================================================
+app = FastAPI(
+    title=config.API_TITLE,
+    description="""
+    ## 太鼓之達人 AI 遊玩顧問 API
+    
+    ### 認證
+    大部分端點需要 `Authorization: Bearer <access_code>` header
+    
+    ### 速率限制
+    - 聊天端點: 10 次/分鐘
+    - 其他端點: 30 次/分鐘
+    """,
+    version="2.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=[
+        {"name": "auth", "description": "認證相關端點"},
+        {"name": "profile", "description": "用戶個人資料管理"},
+        {"name": "sessions", "description": "對話歷史管理"},
+        {"name": "chat", "description": "AI 聊天與推薦"}
+    ]
 )
 
-# 掛載靜態檔案 (前端)
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ============================================================================
+# 速率限制
+# ============================================================================
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
 
-# 初始化 Gemini 與資料庫位置
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-db_path = os.getenv("SONGS_DB_PATH", "data/songs.json")
-chroma_path = os.path.join(os.path.dirname(db_path), "chroma_db")
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: Exception) -> Response:
+    """處理速率限制異常"""
+    error_id = str(uuid4())[:8].upper()
+    logger.warning(f"[{error_id}] Rate limit exceeded for {request.client.host if request.client else 'unknown'} (path: {request.url.path})")
+    return Response(
+        content=json.dumps({
+            "error": "請求次數過多",
+            "detail": "請稍後再試",
+            "error_id": error_id
+        }),
+        status_code=429,
+        media_type="application/json"
+    )
 
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# ============================================================================
+# 統一異常處理
+# ============================================================================
+@app.exception_handler(TaikoAdvisorException)
+async def taiko_exception_handler(request: Request, exc: TaikoAdvisorException):
+    """處理自定義異常"""
+    logger.warning(f"[{exc.error_id}] {exc.__class__.__name__}: {exc.message} (path: {request.url.path})")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.message,
+            "error_id": exc.error_id  # 返回 error_id 供客戶端日誌記錄
+        }
+    )
 
-# 初始化 ChromaDB
-try:
-    chroma_client = chromadb.PersistentClient(path=chroma_path)
-    collection = chroma_client.get_collection(name="taiko_songs")
-except Exception as e:
-    print(f"ChromaDB 初始化失敗: {e}")
-    collection = None
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """處理未預期的異常"""
+    error_id = str(uuid4())[:8].upper()
+    logger.error(f"[{error_id}] Unhandled exception: {exc} (path: {request.url.path})", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "伺服器內部錯誤",
+            "error_id": error_id  # 返回 error_id 供客戶端追蹤
+        }
+    )
 
-# 讀取全部歌曲做為 Fallback
-with open(db_path, 'r', encoding='utf-8') as f:
-    all_songs = json.load(f)
 
-users_path = os.getenv("USERS_DB_PATH", "data/users.json")
+# ============================================================================
+# 安全中間件
+# ============================================================================
+class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
+    """限制請求體積大小"""
+    async def dispatch(self, request: Request, call_next):
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > config.MAX_REQUEST_SIZE:
+                logger.warning(f"請求體積過大: {content_length} bytes (path: {request.url.path})")
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "請求體積過大，上限為 1MB"}
+                )
+        return await call_next(request)
 
-def load_users():
-    if not os.path.exists(users_path):
-        return {}
-    with open(users_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+app.add_middleware(LimitRequestSizeMiddleware)
 
-def save_users(users_data):
-    with open(users_path, 'w', encoding='utf-8') as f:
-        json.dump(users_data, f, indent=2, ensure_ascii=False)
-
-class MessageItem(BaseModel):
-    role: str
-    content: str
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """添加安全 HTTP Headers。
     
-class ChatRequest(BaseModel):
-    message: str
-    code: str
-    history: list[MessageItem] = []
+    安全說明：
+    - 外部腳本（CDN）：允許加載
+    - 內聯腳本：已移除 'unsafe-inline'
+    - 內聯樣式：使用 nonce 機制保護
+    """
+    # 為此請求生成唯一的 CSP nonce
+    nonce = str(uuid4())[:12]
+    request.state.csp_nonce = nonce
+    
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    # Content-Security-Policy: 增強安全，移除對 'unsafe-inline' 的依賴
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "  # ✅ 移除 'unsafe-inline'
+        f"style-src 'self' 'nonce-{nonce}' 'unsafe-inline'; "  # ⚠️ 過渡方案
+        "img-src 'self' data: https:; "
+        "font-src 'self' https:; "
+        "connect-src 'self' https://cdn.jsdelivr.net https://generativelanguage.googleapis.com; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return response
 
-class LoginRequest(BaseModel):
-    code: str
 
-class ProfileRequest(BaseModel):
-    code: str
-    name: str   # 玩家名稱
-    level: str  # 最高段位
-    star_pref: str  # 偏好星星數
-    style: str  # 打法偏好
+# CORS 中間件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS if isinstance(config.CORS_ORIGINS, list) else ["http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
+)
 
-class SaveSessionRequest(BaseModel):
-    code: str
-    title: str
-    messages: list[MessageItem]
+# Trusted Host 中間件
+# 在開發環境（DEBUG=True）下停用 TrustedHostMiddleware，以支持 LAN IP、容器網域或反向代理存取
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+if not DEBUG:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=config.TRUSTED_HOSTS
+    )
 
+
+# ============================================================================
+# 資源初始化
+# ============================================================================
+os.makedirs(config.STATIC_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
+
+
+# ============================================================================
+# 註冊 API 路由
+# ============================================================================
+# /api/login
+app.include_router(login_router, prefix="/api/login", tags=["auth"])
+
+# /api/profile
+app.include_router(profile_router, prefix="/api/profile", tags=["profile"])
+
+# /api/sessions
+app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
+
+# /api/chat 和 /api/logout
+app.include_router(chat_router, prefix="/api", tags=["chat"])
+
+
+# ============================================================================
+# 主頁路由
+# ============================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    with open("static/index.html", "r", encoding="utf-8") as f:
-        return f.read()
-
-@app.post("/api/login")
-async def login_endpoint(req: LoginRequest):
-    users = load_users()
-    if req.code in users:
-        user_data = users[req.code]
-        # 回傳是否需要填寫 profile
-        needs_profile = user_data.get("profile") is None
-        return {"success": True, "needs_profile": needs_profile, "profile": user_data.get("profile")}
-    return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-
-@app.post("/api/profile")
-async def profile_endpoint(req: ProfileRequest):
-    users = load_users()
-    if req.code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-        
-    users[req.code]["profile"] = {
-        "name": req.name,
-        "level": req.level,
-        "star_pref": req.star_pref,
-        "style": req.style
-    }
-    save_users(users)
-    return {"success": True, "message": "個人資料已儲存！"}
-
-@app.get("/api/profile")
-async def get_profile(code: str):
-    users = load_users()
-    if code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
-    profile = users[code].get("profile")
-    return {"profile": profile}
-
-@app.get("/api/sessions")
-async def get_sessions(code: str):
-    users = load_users()
-    if code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
-    sessions = users[code].get("chat_sessions", [])
-    return {"sessions": sessions}
-
-@app.post("/api/sessions")
-async def save_session(req: SaveSessionRequest):
-    users = load_users()
-    if req.code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
-    user_data = users[req.code]
-    sessions = user_data.get("chat_sessions", [])
-    
-    if len(sessions) >= 3:
-        return JSONResponse(status_code=400, content={"error": "已達到儲存對話數量上限 (3個)，請先刪除舊的對話。"})
-        
-    import uuid
-    new_session = {
-        "id": str(uuid.uuid4()),
-        "title": req.title,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages]
-    }
-    
-    sessions.append(new_session)
-    user_data["chat_sessions"] = sessions
-    save_users(users)
-    
-    return {"success": True, "session_id": new_session["id"]}
-
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, code: str):
-    users = load_users()
-    if code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-        
-    user_data = users[code]
-    sessions = user_data.get("chat_sessions", [])
-    
-    new_sessions = [s for s in sessions if s["id"] != session_id]
-    user_data["chat_sessions"] = new_sessions
-    save_users(users)
-    
-    return {"success": True}
-
-@app.post("/api/chat")
-async def chat_endpoint(req: ChatRequest):
-    message = req.message
-    code = req.code
-    
-    users = load_users()
-    if code not in users:
-        return JSONResponse(status_code=401, content={"error": "無效的存取代碼。"})
-    
-    user_data = users[code]
-    profile = user_data.get("profile")
-    profile_text = ""
-    if profile:
-        profile_text = f'''【玩家實力與偏好設定】
-玩家名稱: {profile.get("name", "玩家")}
-最高段位: {profile.get("level", "未知")}
-偏好星級: {profile.get("star_pref", "未知")}
-打法偏好: {profile.get("style", "未知")}
-'''
-    
-    if not client:
-        return JSONResponse(status_code=500, content={"error": "找不到 Gemini API Key"})
-
-    candidate_songs = []
-    
-    if collection:
-        try:
-            # 進行語意查詢，取出前30筆
-            results = collection.query(
-                query_texts=[message],
-                n_results=30
-            )
-            if results and results['metadatas'] and len(results['metadatas'][0]) > 0:
-                for meta in results['metadatas'][0]:
-                    song_obj = json.loads(meta['json'])
-                    candidate_songs.append(song_obj)
-        except Exception as e:
-            print(f"ChromaDB 查詢發生錯誤: {e}")
-    
-    # Fallback 機制
-    if not candidate_songs:
-        candidate_songs = random.sample(all_songs, min(15, len(all_songs)))
-
-    songs_context = json.dumps(candidate_songs, ensure_ascii=False)
-    
-    history_text = ""
-    if req.history:
-        history_text = "【之前的對話紀錄】\n"
-        for msg in req.history:
-            role_name = "玩家: " if msg.role == "user" else "顧問: "
-            history_text += f"{role_name}{msg.content}\n"
-        history_text += "\n"
-
-    prompt = f"""你是一個專業、有耐心的「太鼓之達人」遊玩顧問。
-請根據玩家的需求，從以下的【候選歌曲資料庫】中挑選出最適合的歌曲來推薦。
-{profile_text}
-{history_text}
-- 如果玩家只是閒聊，請普通地回應他。
-- 如果推薦的要求帶有難度要求，輸出時請直接輸出該難度的資訊，不要輸出其他難度的資訊。
-- 若【玩家實力與偏好設定】有資料，請在推薦歌曲時，務必將這些偏好納入考量，挑選符合他實力與打法的歌曲。
-- 請記得參考【之前的對話紀錄】(如果有)，接續之前的脈絡進行回覆。
-- 推薦的歌曲以3首為上限。
-- 如果是要求推薦，請將推薦出來的歌曲以漂亮地排版，包含曲名(使用橙色標記)、歌曲類別、難度&星級()、BPM。不要使用任何表情符號。
-- 務必只能推薦存在於資料庫中的歌曲，如果資料庫中沒有完全匹配的，可以推薦最相近的歌曲，並委婉說明。
-- 務必使用繁體中文回應。
-
-【候選歌曲資料庫】：
-{songs_context}
-
-【玩家需求】：
-{message}
-"""
+    """提供前端 HTML"""
     try:
-        def stream_generator():
-            responseStream = client.models.generate_content_stream(
-                model='gemini-2.5-flash-lite',
-                contents=prompt,            
-            )
-            for chunk in responseStream:
-                if chunk.text:
-                    yield chunk.text
+        index_path = os.path.join(config.STATIC_DIR, "index.html")
+        with open(index_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>找不到 index.html 檔案</h1>"
 
-        return StreamingResponse(stream_generator(), media_type="text/plain")
-        
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"LLM 發生錯誤: {str(e)}"})
 
+@app.get("/health")
+async def health_check():
+    """健康檢查端點"""
+    from lib.dependencies import get_client, get_collection, get_all_songs
+    import sys
+    
+    client = get_client()
+    collection = get_collection()
+    all_songs = get_all_songs()
+    
+    # 檢查所有依賴
+    checks = {
+        "gemini": client is not None,
+        "chromadb": collection is not None,
+        "songs_loaded": len(all_songs) > 0,
+        "user_db_writable": os.access(config.USERS_DB_PATH, os.W_OK) if os.path.exists(config.USERS_DB_PATH) else True
+    }
+    
+    all_healthy = all(checks.values())
+    
+    return {
+        "status": "healthy" if all_healthy else "degraded",
+        "version": "2.0",
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "checks": checks,
+        "songs_count": len(all_songs)
+    }
+
+
+# ============================================================================
+# 應用啟動
+# ============================================================================
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

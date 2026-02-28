@@ -4,78 +4,96 @@
 註 : 所有程式碼均使用vibe coding
 
 ## ✨ 核心特色
-- **🤖 AI 驅動的推薦系統**：使用 Gemini 模型爬取並深度分析網路攻略文字，自動萃取出客觀的譜面標籤（如：高BPM、體力向、三連音為主）。
-- **🔍 語意向量搜尋**：將包含 Max Combo 與 AI 標籤的歌曲資料嵌入為 ChromaDB 向量，實現自然語言查詢。
-- **🎮 個人畫像記憶**：支援存取代碼登入，並能記住個人的「太鼓履歷」（最高段位、愛好星級、打法）。
-- **💬 聊天室記憶與串流回覆**：儲存最多三組歷史對話紀錄，並且以打字機風格動態串流輸出。
+- **🤖 AI 驅動的推薦系統**：使用 Gemini 模型深度分析網路攻略，自動萃取譜面標籤（高BPM、體力向、三連音等）
+- **🔍 語意向量搜尋**：ChromaDB 向量搜尋實現自然語言查詢
+- **🎮 個人畫像記憶**：存取代碼登入，記住玩家的「太鼓履歷」（段位、愛好星級、打法風格）
+- **💬 聊天與對話管理**：最多三組歷史對話紀錄，串流式動態回覆
 
-## 專案結構
-- `scraper.py`: 從 wikiwiki 爬取並過濾出純淨的歌曲清單。
-- `generate_tags.py`: 深度爬蟲與 AI 特徵精煉器，抓取最大連擊數與特徵標籤。
-- `init_chroma.py`: 將 `songs.json` 的歌曲轉換成 ChromaDB 語意向量庫。
-- `server.py`: FastAPI 核心伺服器，負責與前端介接、Gemini 串流對答、與帳號驗證。
-- `static/`: 前端 HTML / CSS / JS 介面代碼。
-- `data/`: 存放 `songs.json` 歌曲庫與 `users.json` 帳號資料。
+## 📁 專案結構
 
-## 🚀 佈署與啟動指南
+### 核心文件
+- `server.py`: FastAPI 應用程式入口點，包含中間件與路由註冊
+- `config.py`: 集中配置文件（API Key、資料庫路徑、安全設定等）
+- `scraper.py`: 從 wikiwiki 爬取並過濾歌曲清單
+- `generate_tags.py`: AI 特徵精煉器，抓取最大連擊數與譜面標籤
+- `init_chroma.py`: 將歌曲轉換成 ChromaDB 向量庫
 
-為了保護使用者隱私與資料庫運作效能，本專案的歌曲來源資料庫 (`data/songs.json`)、向量快取 (`chroma_db`) 以及使用者設定 (`data/users.json`) **不會包含在開源版本庫中**，你必須自己抓取與建立。
+### 模塊化架構 (`lib/` 目錄)
+```
+lib/
+├── auth/
+│   ├── token_manager.py      # 令牌生命週期管理（過期驗證、登出）
+│   └── validators.py          # 輸入驗證與清理
+├── services/
+│   ├── user_service.py        # 用戶數據操作（CRUD）
+│   └── chat_service.py        # 聊天上下文構建與提示詞生成
+├── utils/                     # 實用函數工具
+└── dependencies.py            # FastAPI 依賴注入系統
+```
 
-### 步驟 1：安裝套件與環境
+### API 路由 (`api/` 目錄)
+```
+api/
+├── login/route.py             # POST /api/login - 用戶認證
+├── profile/route.py           # GET/POST /api/profile - 個人資料管理
+├── sessions/route.py          # GET/POST/DELETE /api/sessions - 對話歷史
+└── chat/route.py              # POST /api/chat, /api/logout - 聊天與登出
+```
+
+### 前端與資料
+- `static/`: HTML / CSS / JS 前端介面
+- `data/`: 歌曲庫 (`songs.json`) 與使用者帳戶 (`users.json`)
+
+## 🚀 快速開始
+
+### 基本需求
+- Python 3.10+
+- Gemini API Key
+- Git
+
+### 快速安裝
+
 ```bash
-git clone <本專案網址>
-cd taiko_ai
+# 1. 克隆專案
+git clone https://github.com/NatsuYukiowob/Taiko-Advisor.git
+cd Taiko-Advisor
 
-# 建議使用虛擬環境
-python -m venv venv
-source venv/bin/activate  # Windows 輸入: venv\Scripts\activate
+# 2. 創建虛擬環境並安裝依賴
+python -m venv .venv
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# macOS/Linux
+source .venv/bin/activate
 
 pip install -r requirements.txt
-```
 
-### 步驟 2：設定 API 授權金鑰
-複製環境變數範例檔，並填入你的 Gemini API Key：
-```bash
+# 3. 設定 API Key
 cp .env.example .env
-```
-*(請將你的 `GEMINI_API_KEY` 填入 `.env` 檔案中)*
+# 編輯 .env 並填入 GEMINI_API_KEY
 
-### 步驟 3：[第一次佈署必做] 初始化資料庫
-請確保留定足夠的時間讓程式透過網路抓取與分析資料：
-```bash
-# 1. 爬取原始歌曲與最大連擊數: (需時約幾分鐘)
+# 4. 初始化數據庫（首次部署必做）
 python scraper.py
-
-# 2. 呼叫 Gemini AI 精煉歌曲特色標籤 (有中斷接續機制):
 python generate_tags.py
-
-# 3. 嵌入 ChromaDB 語意向量庫:
 python init_chroma.py
-```
 
-### 步驟 4：設定管理員與使用者帳號
-為了控制誰可以使用你的 AI，系統採用白名單存取代碼機制。
-請手動在 `data/` 資料夾中建立一份 `users.json`，格式如下：
-```json
-{
-  "YOUR_SECRET_ACCESS_CODE_1": {
-    "profile": null,
-    "chat_sessions": []
-  },
-  "YOUR_SECRET_ACCESS_CODE_2": {
-    "profile": null,
-    "chat_sessions": []
-  }
-}
-```
-*把 `YOUR_SECRET_ACCESS_CODE` 替換成你要分發給朋友的密碼。當他們初次登入時，profile 就會自動建立。*
+# 5. 創建 data/users.json（見部署指南）
 
-### 步驟 5：啟動伺服器
-```bash
+# 6. 啟動伺服器
 python server.py
-# 或使用 uvicorn 正式運行：uvicorn server:app --host 0.0.0.0 --port 8000
 ```
-現在打開瀏覽器前往 `http://127.0.0.1:8000` 即可開始玩囉！
+
+訪問 `http://127.0.0.1:8000` 開始使用！
+
+### 📖 詳細文檔
+
+**重要提示：** 本專案的歌曲資料庫 (`data/songs.json`)、向量快取 (`chroma_db`) 以及使用者設定 (`data/users.json`) 不包含在版本控制中，需要自行建立。
+
+完整的部署說明、Docker 配置、生產環境設定等詳見：
+- **[部署指南 (DEPLOYMENT_GUIDE.md)](DEPLOYMENT_GUIDE.md)** - 完整的安裝與配置步驟
+- **本地開發環境** - 詳細的開發環境設置
+- **Docker 部署** - 容器化部署方案
+- **生產環境配置** - Nginx、SSL、Systemd 等配置
+- **性能優化與監控** - 最佳實踐與故障排除
 
 ## 👨‍💻 技術堆疊
 * **Backend:** FastAPI, Python
