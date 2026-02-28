@@ -163,7 +163,11 @@ async function saveProfile() {
 
 async function loadSessions(autoLoadLatest = false) {
     try {
-        const res = await fetch(`/api/sessions?code=${accessCode}`);
+        const res = await fetch('/api/sessions', {
+            headers: {
+                'Authorization': `Bearer ${accessCode}`
+            }
+        });
         if (res.ok) {
             const data = await res.json();
             currentSessions = data.sessions || [];
@@ -230,7 +234,12 @@ function loadChat(session) {
 async function deleteSession(id) {
     if (!confirm('確定要刪除這筆紀錄嗎？')) return;
     try {
-        const res = await fetch(`/api/sessions/${id}?code=${accessCode}`, { method: 'DELETE' });
+        const res = await fetch(`/api/sessions/${id}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${accessCode}`
+            }
+        });
         if (res.ok) {
             loadSessions();
         } else {
@@ -451,7 +460,11 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function openProfileModal() {
     try {
-        const res = await fetch(`/api/profile?code=${accessCode}`);
+        const res = await fetch('/api/profile', {
+            headers: {
+                'Authorization': `Bearer ${accessCode}`
+            }
+        });
         if (res.ok) {
             const data = await res.json();
             const p = data.profile || {};

@@ -22,7 +22,7 @@
 ```
 lib/
 ├── auth/
-│   ├── token_manager.py      # 令牌生命週期管理（黑名單、過期驗證）
+│   ├── token_manager.py      # 令牌生命週期管理（過期驗證）
 │   └── validators.py          # 輸入驗證與消毒（防注入）
 ├── services/
 │   ├── user_service.py        # 用戶數據操作（CRUD）

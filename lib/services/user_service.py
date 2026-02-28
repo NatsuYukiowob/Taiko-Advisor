@@ -4,6 +4,8 @@
 import os
 import json
 import time
+import tempfile
+from filelock import FileLock
 import config
 
 
@@ -11,14 +13,34 @@ def load_users():
     """載入用戶數據"""
     if not os.path.exists(config.USERS_DB_PATH):
         return {}
-    with open(config.USERS_DB_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    lock_path = config.USERS_DB_PATH + ".lock"
+    with FileLock(lock_path):
+        try:
+            with open(config.USERS_DB_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return {}
 
 
 def save_users(users_data):
     """保存用戶數據"""
-    with open(config.USERS_DB_PATH, "w", encoding="utf-8") as f:
-        json.dump(users_data, f, indent=2, ensure_ascii=False)
+    dir_path = os.path.dirname(config.USERS_DB_PATH)
+    if dir_path:
+        os.makedirs(dir_path, exist_ok=True)
+
+    lock_path = config.USERS_DB_PATH + ".lock"
+    with FileLock(lock_path):
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            delete=False,
+            dir=dir_path if dir_path else None,
+            suffix=".tmp",
+        ) as tmp_file:
+            json.dump(users_data, tmp_file, indent=2, ensure_ascii=False)
+            tmp_path = tmp_file.name
+
+        os.replace(tmp_path, config.USERS_DB_PATH)
 
 
 def get_user(code: str):

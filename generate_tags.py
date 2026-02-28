@@ -110,8 +110,8 @@ def get_bpm_tag(bpm_val):
             return "高BPM"
         elif max_b >= 260:
             return "超高BPM"
-    finally:
-        pass
+    except (ValueError, TypeError):
+        return None
     return None
 
 

@@ -1,7 +1,7 @@
 """
 個人資料 API 路由 - /api/profile
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import config
@@ -67,11 +67,20 @@ async def save_profile(req: ProfileRequest):
 
 
 @router.get("")
-async def get_profile(code: str):
+async def get_profile(authorization: str = Header(None)):
     """
     獲取用戶個人資料
+
+    Authorization header 格式: Bearer <access_code>
     """
-    code = sanitize_input(code, max_length=config.ACCESS_CODE_MAX_LENGTH)
+    if not authorization:
+        return JSONResponse(status_code=401, content={"error": "缺少 Authorization header"})
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return JSONResponse(status_code=401, content={"error": "無效的 Authorization header 格式"})
+
+    code = sanitize_input(parts[1], max_length=config.ACCESS_CODE_MAX_LENGTH)
     
     # 驗證令牌
     if not validate_token(code):
