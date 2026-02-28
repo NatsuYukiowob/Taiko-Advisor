@@ -57,7 +57,7 @@ cd taiko_ai
 python -m venv .venv
 
 # macOS / Linux
-source .venv/Scripts/activate
+source .venv/bin/activate
 # Windows (PowerShell)
 .venv\Scripts\Activate.ps1
 # Windows (CMD)
