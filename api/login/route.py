@@ -43,7 +43,9 @@ async def login(req: LoginRequest):
     else:
         expiry_time = created_at + (config.TOKEN_EXPIRY_DAYS * 86400)
         if time.time() > expiry_time:
-            # 過期用戶已在 validate_token 中被刪除
+            # 存取代碼已過期，刪除用戶資料以便未來可重新登入
+            users.pop(code, None)
+            save_users(users)
             return JSONResponse(status_code=401, content={"error": "存取代碼已過期，請重新申請"})
     
     # 回傳是否需要填寫 profile
